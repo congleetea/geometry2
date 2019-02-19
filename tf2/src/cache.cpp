@@ -285,6 +285,7 @@ unsigned int TimeCache::getListLength()
   return storage_.size();
 }
 
+// 获取该目标坐标最近的一个转换的时间和父坐标.
 P_TimeAndFrameID TimeCache::getLatestTimeAndParent()
 {
   if (storage_.empty())

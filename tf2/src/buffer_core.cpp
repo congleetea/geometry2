@@ -277,6 +277,7 @@ bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_i
     boost::mutex::scoped_lock lock(frame_mutex_);
     // 查找该frame对应的id编号(CompactFrameID 就是 uint32).
     CompactFrameID frame_number = lookupOrInsertFrameNumber(stripped.child_frame_id);
+    // 每个child_frame 都会有一个TimeCacheInterfacePtr.
     // 获取frame的接口，里面包含一个 L_TransformStorage，这是一个双向队列std::deque。
     TimeCacheInterfacePtr frame = getFrame(frame_number);
     if (frame == NULL)
@@ -342,8 +343,11 @@ int BufferCore::walkToTopParent(F& f, ros::Time time, CompactFrameID target_id,
   }
 
   //If getting the latest get the latest common time
+  // 获取最近的转换。
   if (time == ros::Time())
   {
+    // 先从 source_id 查起父坐标，如果没有查到 target_id, 再从 target_id 查起。直
+    // 到找到共同的坐标。
     int retval = getLatestCommonTime(target_id, source_id, time, error_string);
     if (retval != tf2_msgs::TF2Error::NO_ERROR)
     {
@@ -603,18 +607,27 @@ struct TransformAccum
   tf2::Vector3 result_vec;
 };
 
+/**
+ * @brief 查找两个坐标系之间的转换, 返回变换结果。
+ * @param target_frame: 转换到该坐标系；
+ * @param source_frame: 从该坐标系转换；
+ * @param time: 获取该时刻的转换信息，如果为0就获取最近的一个转换。
+ * @return 返回变换结果.
+ */
 geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& target_frame,
                                                             const std::string& source_frame,
                                                             const ros::Time& time) const
 {
   boost::mutex::scoped_lock lock(frame_mutex_);
 
+  // 如果父子坐标系相同的情况。
   if (target_frame == source_frame) {
     geometry_msgs::TransformStamped identity;
     identity.header.frame_id = target_frame;
     identity.child_frame_id = source_frame;
     identity.transform.rotation.w = 1;
 
+    // 如果time为0, 查找坐标信息，赋值时间即可。
     if (time == ros::Time())
     {
       CompactFrameID target_id = lookupFrameNumber(target_frame);
@@ -623,19 +636,20 @@ geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& t
         identity.header.stamp = cache->getLatestTimestamp();
       else
         identity.header.stamp = time;
-    }
-    else
+    } else
       identity.header.stamp = time;
 
     return identity;
   }
 
   //Identify case does not need to be validated above
+  // 检查坐标的有效性，其实就是去掉开头的斜杠，查询表中是否有该坐标的 id ,有的话返回该 id 即可。
   CompactFrameID target_id = validateFrameId("lookupTransform argument target_frame", target_frame);
   CompactFrameID source_id = validateFrameId("lookupTransform argument source_frame", source_frame);
 
   std::string error_string;
   TransformAccum accum;
+  // 寻找两个坐标系共同的时间，计算两个坐标系之间的转换。
   int retval = walkToTopParent(accum, time, target_id, source_id, &error_string);
   if (retval != tf2_msgs::TF2Error::NO_ERROR)
   {
@@ -914,7 +928,7 @@ CompactFrameID BufferCore::lookupFrameNumber(const std::string& frameid_str) con
   M_StringToCompactFrameID::const_iterator map_it = frameIDs_.find(frameid_str);
   if (map_it == frameIDs_.end())
   {
-    retval = CompactFrameID(0);  // 如果是第一个就使用0编号。 
+    retval = CompactFrameID(0);  // 如果是第一个就使用0编号。
   }
   else
     retval = map_it->second;
@@ -1008,6 +1022,7 @@ struct TimeAndFrameIDFrameComparator
   CompactFrameID id;
 };
 
+// 查找两个坐标系的共同时间(最新的)。
 int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID source_id, ros::Time & time, std::string * error_string) const
 {
   // Error if one of the frames don't exist.
@@ -1018,7 +1033,7 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
     TimeCacheInterfacePtr cache = getFrame(source_id);
     //Set time to latest timestamp of frameid in case of target and source frame id are the same
     if (cache)
-      time = cache->getLatestTimestamp();
+      time = cache->getLatestTimestamp();  // 获取最新的时间戳。
     else
       time = ros::Time();
     return tf2_msgs::TF2Error::NO_ERROR;
@@ -1031,7 +1046,9 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
   CompactFrameID frame = source_id;
   P_TimeAndFrameID temp;
   uint32_t depth = 0;
-  ros::Time common_time = ros::TIME_MAX;
+  ros::Time common_time = ros::TIME_MAX;  // 共同的时间，因为两个坐标的时间不一定相同。要选择一个共同的时间。
+
+  // 从source_id开始查起, 找到父坐标，确定一次共同时间，完了再找该父坐标的上级父坐标。直到找到的父坐标是target_frame未知.
   while (frame != 0)
   {
     TimeCacheInterfacePtr cache = getFrame(frame);
@@ -1042,24 +1059,31 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
       break;
     }
 
+    // 获取该目标坐标最近的一个转换的时间(key)和父坐标的id(value)。
     P_TimeAndFrameID latest = cache->getLatestTimeAndParent();
 
+    // 如过父节点的id==0说明有错。
     if (latest.second == 0)
     {
       // Just break out here... there may still be a path from source -> target
       break;
     }
 
+    // 如果时间不是0, 将common_time修改为改时间.
     if (!latest.first.isZero())
     {
       common_time = std::min(latest.first, common_time);
     }
 
+    // 将该父坐标的信息加入到lct_cache中.
     lct_cache.push_back(latest);
 
-    frame = latest.second;
+    frame = latest.second;  // 将父坐标赋值给frame,如果该父坐标不是target frame，继续找该坐标的父坐标。
 
     // Early out... target frame is a direct parent of the source frame
+    // 如果查到了target_id, 说明找到最后了, 共同时间就确定了。
+    // 否则++depth继续查找。
+    // 如果移植没有找到目标坐标，那么就找到坐标id==0的情况(说明这是顶级坐标系了).
     if (frame == target_id)
     {
       time = common_time;
@@ -1071,6 +1095,7 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
     }
 
     ++depth;
+    // 如果坐标深度超过限度，说明包含一个环形的坐标链，是无效的tf tree.
     if (depth > MAX_GRAPH_DEPTH)
     {
       if (error_string)
@@ -1085,10 +1110,12 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
   }
 
   // Now walk to the top parent from the target frame, accumulating the latest time and looking for a common parent
+
+  // 如果从source_id中没有找到target_id,那就再从target_id来查找。
   frame = target_id;
   depth = 0;
   common_time = ros::TIME_MAX;
-  CompactFrameID common_parent = 0;
+  CompactFrameID common_parent = 0;  // 两个坐标的共同的祖先id。
   while (true)
   {
     TimeCacheInterfacePtr cache = getFrame(frame);
@@ -1098,6 +1125,7 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
       break;
     }
 
+    // 同样找到时间及其父坐标id。
     P_TimeAndFrameID latest = cache->getLatestTimeAndParent();
 
     if (latest.second == 0)
@@ -1110,6 +1138,8 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
       common_time = std::min(latest.first, common_time);
     }
 
+    // 查找从target_id找起的父坐标id是否在之前从source_id找起保存的信息中。如果
+    // 找到了就说明找到了两个坐标的共同祖先。
     std::vector<P_TimeAndFrameID>::iterator it = std::find_if(lct_cache.begin(), lct_cache.end(), TimeAndFrameIDFrameComparator(latest.second));
     if (it != lct_cache.end()) // found a common parent
     {
@@ -1151,6 +1181,7 @@ int BufferCore::getLatestCommonTime(CompactFrameID target_id, CompactFrameID sou
   }
 
   // Loop through the source -> root list until we hit the common parent
+  // 选取到共同祖先坐标最小的时间为我们需要的时间。
   {
     std::vector<P_TimeAndFrameID>::iterator it = lct_cache.begin();
     std::vector<P_TimeAndFrameID>::iterator end = lct_cache.end();
