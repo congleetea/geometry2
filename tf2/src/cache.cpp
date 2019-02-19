@@ -242,10 +242,17 @@ CompactFrameID TimeCache::getParent(ros::Time time, std::string* error_str)
   return p_temp_1->frame_id_;
 }
 
+/**
+ * @brief storage_ 是一个双向队列 std::deque.  
+ *   注意这里的deque是通过insert直接插入到特定的位置的。并且begin的时间是最新的，
+ *   back的时间是最老的。
+ */
 bool TimeCache::insertData(const TransformStorage& new_data)
 {
   L_TransformStorage::iterator storage_it = storage_.begin();
 
+  // 如果开头不是结尾说明有数据，且begin是最新的数据，如果最新的时间比当前的时间还要
+  // 新超过最大保存时间，那就说明当前这条数据已经过期了。丢掉。
   if(storage_it != storage_.end())
   {
     if (storage_it->stamp_ > new_data.stamp_ + max_storage_time_)
@@ -254,7 +261,7 @@ bool TimeCache::insertData(const TransformStorage& new_data)
     }
   }
 
-
+  // 遍历所有坐标变换，找到刚好比当前这条消息时间小的，将当前的新消息插入其后。
   while(storage_it != storage_.end())
   {
     if (storage_it->stamp_ <= new_data.stamp_)
@@ -263,6 +270,7 @@ bool TimeCache::insertData(const TransformStorage& new_data)
   }
   storage_.insert(storage_it, new_data);
 
+  // 最后清理一次保存的转换，将时间过期的全部删除。
   pruneList();
   return true;
 }

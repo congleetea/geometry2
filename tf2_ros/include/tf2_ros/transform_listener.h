@@ -66,7 +66,7 @@ private:
   void static_subscription_callback(const ros::MessageEvent<tf2_msgs::TFMessage const>& msg_evt);
   void subscription_callback_impl(const ros::MessageEvent<tf2_msgs::TFMessage const>& msg_evt, bool is_static);
 
-  ros::CallbackQueue tf_message_callback_queue_;
+  ros::CallbackQueue tf_message_callback_queue_;  /* spin_thread=true 的时候，使用多线程回调的队列。 */
   boost::thread* dedicated_listener_thread_;
   ros::NodeHandle node_;
   ros::Subscriber message_subscriber_tf_;

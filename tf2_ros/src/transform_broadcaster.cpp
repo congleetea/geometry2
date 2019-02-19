@@ -37,6 +37,9 @@
 
 namespace tf2_ros {
 
+// 初始时，实例化一个坐标转换广播器。在构造函数中定义发布器，往"/tf"上发布消息。消息类型
+// tf2_msgs::TFMessage 作为一种统一的类型,他是 geometry_msgs/TransformStamped 的vector。
+// 使用的时候只需要调用 sendTransform 即可。注意这里发布的是父坐标和子坐标的转换关系。
 TransformBroadcaster::TransformBroadcaster()
 {
   publisher_ = node_.advertise<tf2_msgs::TFMessage>("/tf", 100);

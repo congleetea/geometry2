@@ -100,6 +100,7 @@ void setIdentity(geometry_msgs::Transform& tx)
   tx.rotation.w = 1;
 }
 
+// 检查 frame_id 是否是以斜杠开头的。
 bool startsWithSlash(const std::string& frame_id)
 {
   if (frame_id.size() > 0)
@@ -108,6 +109,7 @@ bool startsWithSlash(const std::string& frame_id)
   return false;
 }
 
+// 如果in是以斜杠开头的，去掉开头的斜杠.
 std::string stripSlash(const std::string& in)
 {
   std::string out = in;
@@ -161,7 +163,7 @@ CompactFrameID BufferCore::validateFrameId(const char* function_name_arg, const 
     ss << "\"" << frame_id << "\" passed to "<< function_name_arg <<" does not exist. ";
     throw tf2::LookupException(ss.str().c_str());
   }
-  
+
   return id;
 }
 
@@ -195,13 +197,16 @@ void BufferCore::clear()
         (*cache_it)->clearList();
     }
   }
-  
+
 }
 
+/**
+ * @brief 在buffer中处理转换消息。注意转换表示的是两个坐标之间的相对位置关系。
+ */
 bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_in, const std::string& authority, bool is_static)
 {
 
-  /////BACKEARDS COMPATABILITY 
+  /////BACKEARDS COMPATABILITY
   /* tf::StampedTransform tf_transform;
   tf::transformStampedMsgToTF(transform_in, tf_transform);
   if  (!old_tf_.setTransform(tf_transform, authority))
@@ -210,18 +215,21 @@ bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_i
     }*/
 
   /////// New implementation
+  // 将父子 frame_id 开头的斜杠去掉(如果有的话)。
   geometry_msgs::TransformStamped stripped = transform_in;
   stripped.header.frame_id = stripSlash(stripped.header.frame_id);
   stripped.child_frame_id = stripSlash(stripped.child_frame_id);
 
-
+  // 进行有效性检测.
   bool error_exists = false;
+  // 父子坐标是同一个，报错。
   if (stripped.child_frame_id == stripped.header.frame_id)
   {
     CONSOLE_BRIDGE_logError("TF_SELF_TRANSFORM: Ignoring transform from authority \"%s\" with frame_id and child_frame_id  \"%s\" because they are the same",  authority.c_str(), stripped.child_frame_id.c_str());
     error_exists = true;
   }
 
+  // 父子坐标其中为空时报错。
   if (stripped.child_frame_id == "")
   {
     CONSOLE_BRIDGE_logError("TF_NO_CHILD_FRAME_ID: Ignoring transform from authority \"%s\" because child_frame_id not set ", authority.c_str());
@@ -234,8 +242,10 @@ bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_i
     error_exists = true;
   }
 
+  // 检查数据是否有效。
   if (std::isnan(stripped.transform.translation.x) || std::isnan(stripped.transform.translation.y) || std::isnan(stripped.transform.translation.z)||
-      std::isnan(stripped.transform.rotation.x) ||       std::isnan(stripped.transform.rotation.y) ||       std::isnan(stripped.transform.rotation.z) ||       std::isnan(stripped.transform.rotation.w))
+      std::isnan(stripped.transform.rotation.x) || std::isnan(stripped.transform.rotation.y) || std::isnan(stripped.transform.rotation.z) ||
+      std::isnan(stripped.transform.rotation.w))
   {
     CONSOLE_BRIDGE_logError("TF_NAN_INPUT: Ignoring transform for child_frame_id \"%s\" from authority \"%s\" because of a nan value in the transform (%f %f %f) (%f %f %f %f)",
               stripped.child_frame_id.c_str(), authority.c_str(),
@@ -245,12 +255,13 @@ bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_i
     error_exists = true;
   }
 
+  // 四元素向量的模值要等于1才有效。
   bool valid = std::abs((stripped.transform.rotation.w * stripped.transform.rotation.w
                         + stripped.transform.rotation.x * stripped.transform.rotation.x
                         + stripped.transform.rotation.y * stripped.transform.rotation.y
                         + stripped.transform.rotation.z * stripped.transform.rotation.z) - 1.0f) < QUATERNION_NORMALIZATION_TOLERANCE;
 
-  if (!valid) 
+  if (!valid)
   {
     CONSOLE_BRIDGE_logError("TF_DENORMALIZED_QUATERNION: Ignoring transform for child_frame_id \"%s\" from authority \"%s\" because of an invalid quaternion in the transform (%f %f %f %f)",
              stripped.child_frame_id.c_str(), authority.c_str(),
@@ -260,14 +271,18 @@ bool BufferCore::setTransform(const geometry_msgs::TransformStamped& transform_i
 
   if (error_exists)
     return false;
-  
+
+  // 坐标转换有效。
   {
     boost::mutex::scoped_lock lock(frame_mutex_);
+    // 查找该frame对应的id编号(CompactFrameID 就是 uint32).
     CompactFrameID frame_number = lookupOrInsertFrameNumber(stripped.child_frame_id);
+    // 获取frame的接口，里面包含一个 L_TransformStorage，这是一个双向队列std::deque。
     TimeCacheInterfacePtr frame = getFrame(frame_number);
     if (frame == NULL)
       frame = allocateFrame(frame_number, is_static);
-
+    // TransformStorage: 这里找到了上下级坐标的 id 以及他们之间的平移和旋转关系。
+    // 插入序列，并清理一遍就的值。
     if (frame->insertData(TransformStorage(stripped, lookupOrInsertFrameNumber(stripped.header.frame_id), frame_number)))
     {
       frame_authority_[frame_number] = authority;
@@ -465,7 +480,7 @@ int BufferCore::walkToTopParent(F& f, ros::Time time, CompactFrameID target_id,
       }
 
       return tf2_msgs::TF2Error::EXTRAPOLATION_ERROR;
-      
+
     }
 
     createConnectivityErrorString(source_id, target_id, error_string);
@@ -503,7 +518,7 @@ int BufferCore::walkToTopParent(F& f, ros::Time time, CompactFrameID target_id,
       }
     }
   }
-  
+
   return tf2_msgs::TF2Error::NO_ERROR;
 }
 
@@ -643,8 +658,8 @@ geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& t
   return output_transform;
 }
 
-                                                       
-geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& target_frame, 
+
+geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& target_frame,
                                                         const ros::Time& target_time,
                                                         const std::string& source_frame,
                                                         const ros::Time& source_time,
@@ -657,7 +672,7 @@ geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& t
   geometry_msgs::TransformStamped output;
   geometry_msgs::TransformStamped temp1 =  lookupTransform(fixed_frame, source_frame, source_time);
   geometry_msgs::TransformStamped temp2 =  lookupTransform(target_frame, fixed_frame, target_time);
-  
+
   tf2::Transform tf1, tf2;
   transformMsgToTF2(temp1.transform, tf1);
   transformMsgToTF2(temp2.transform, tf2);
@@ -671,15 +686,15 @@ geometry_msgs::TransformStamped BufferCore::lookupTransform(const std::string& t
 
 
 /*
-geometry_msgs::Twist BufferCore::lookupTwist(const std::string& tracking_frame, 
-                                          const std::string& observation_frame, 
-                                          const ros::Time& time, 
+geometry_msgs::Twist BufferCore::lookupTwist(const std::string& tracking_frame,
+                                          const std::string& observation_frame,
+                                          const ros::Time& time,
                                           const ros::Duration& averaging_interval) const
 {
   try
   {
   geometry_msgs::Twist t;
-  old_tf_.lookupTwist(tracking_frame, observation_frame, 
+  old_tf_.lookupTwist(tracking_frame, observation_frame,
                       time, averaging_interval, t);
   return t;
   }
@@ -701,12 +716,12 @@ geometry_msgs::Twist BufferCore::lookupTwist(const std::string& tracking_frame,
   }
 }
 
-geometry_msgs::Twist BufferCore::lookupTwist(const std::string& tracking_frame, 
-                                          const std::string& observation_frame, 
+geometry_msgs::Twist BufferCore::lookupTwist(const std::string& tracking_frame,
+                                          const std::string& observation_frame,
                                           const std::string& reference_frame,
-                                          const tf2::Point & reference_point, 
-                                          const std::string& reference_point_frame, 
-                                          const ros::Time& time, 
+                                          const tf2::Point & reference_point,
+                                          const std::string& reference_point_frame,
+                                          const ros::Time& time,
                                           const ros::Duration& averaging_interval) const
 {
   try{
@@ -892,13 +907,14 @@ tf2::TimeCacheInterfacePtr BufferCore::getFrame(CompactFrameID frame_id) const
   }
 }
 
+// 从 frameIDs_ 中找到该frame的id。CompactFrameID其实是 uint32.
 CompactFrameID BufferCore::lookupFrameNumber(const std::string& frameid_str) const
 {
   CompactFrameID retval;
   M_StringToCompactFrameID::const_iterator map_it = frameIDs_.find(frameid_str);
   if (map_it == frameIDs_.end())
   {
-    retval = CompactFrameID(0);
+    retval = CompactFrameID(0);  // 如果是第一个就使用0编号。 
   }
   else
     retval = map_it->second;
@@ -1374,7 +1390,7 @@ bool BufferCore::_getParent(const std::string& frame_id, ros::Time time, std::st
 
   if (! frame)
     return false;
-      
+
   CompactFrameID parent_id = frame->getParent(time, NULL);
   if (parent_id == 0)
     return false;
