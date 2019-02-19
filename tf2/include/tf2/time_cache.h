@@ -116,6 +116,7 @@ class TimeCache : public TimeCacheInterface
   
 
 private:
+  /* 非static的保存区域是一个双向队列，static的只是一个 TransformStorage. */
   typedef std::deque<TransformStorage> L_TransformStorage;
   L_TransformStorage storage_;
 
